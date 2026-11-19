@@ -26,18 +26,22 @@ function getIpvFileList(folderId) {
   while (files.hasNext()) {
     const file = files.next();
     if (file.getName().toLowerCase().endsWith('.ipv')) {
+      const id = file.getId();
+      const lastUpdated = file.getLastUpdated();
       list.push({
-        id: file.getId(),
+        id: id,
         name: file.getName(),
-        updated: Utilities.formatDate(file.getLastUpdated(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'),
+        updated: Utilities.formatDate(lastUpdated, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'),
+        updatedTime: lastUpdated.getTime(),
         sizeKB: Math.round(file.getSize() / 1024),
-        url: file.getUrl()
+        url: file.getUrl(),
+        downloadUrl: `https://drive.google.com/uc?export=download&id=${id}`
       });
     }
   }
 
-  // 更新日時の新しい順にソート
-  list.sort((a, b) => (a.updated < b.updated ? 1 : -1));
+  // デフォルトは更新日時の新しい順
+  list.sort((a, b) => b.updatedTime - a.updatedTime);
   return list;
 }
 
@@ -100,18 +104,15 @@ function extractPreviewPngBase64(fileId) {
  * 排他ロック＋ダブルチェックでキャッシュフォルダを1つだけ取得・作成する
  */
 function getOrCreateCacheFolder() {
-  // 1. すでにフォルダがある場合はロックを取らずに即座に返す（高速パス）
   const fastCheck = DriveApp.searchFolders(`title = '${CACHE_FOLDER_NAME}' and trashed = false`);
   if (fastCheck.hasNext()) {
     return fastCheck.next();
   }
 
-  // 2. 見つからない場合のみロックを取得して順番に処理
   const lock = LockService.getUserLock();
   lock.waitLock(15000);
 
   try {
-    // 先行スレッドが作成済みか再確認
     const folders = DriveApp.searchFolders(`title = '${CACHE_FOLDER_NAME}' and trashed = false`);
     if (folders.hasNext()) {
       return folders.next();
@@ -124,8 +125,6 @@ function getOrCreateCacheFolder() {
 
 /**
  * .ipv ファイルの末尾から逆走査してプレビューPNGのバイト配列を抽出する（50MB超対応）
- * @param {GoogleAppsScript.Drive.File} ipvFile
- * @return {number[]|null}
  */
 function extractPngBytesFromIpvTail(ipvFile) {
   const fileId = ipvFile.getId();
@@ -135,40 +134,36 @@ function extractPngBytesFromIpvTail(ipvFile) {
   const token = ScriptApp.getOAuthToken();
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
 
-  // まず末尾 256KB を取得（フッター + プレビューPNGが収まることが多いサイズ）
   const initialChunkSize = Math.min(totalSize, 262144);
   let bufferStart = totalSize - initialChunkSize;
   let buffer = fetchRangeBytes(url, token, bufferStart, totalSize - 1);
 
-  let cursor = totalSize; // ファイル全体の末尾からスタート
+  let cursor = totalSize;
 
-  // 末尾から最大15レコード分遡って (1,5) のプレビューを探す
   for (let i = 0; i < 15 && cursor > 12; i++) {
-    // 末尾4バイト [-(8+length) i32] を読むためにバッファ範囲を確認
     if (cursor - 4 < bufferStart) {
       bufferStart = Math.max(0, cursor - 65536);
       buffer = fetchRangeBytes(url, token, bufferStart, cursor - 1);
     }
 
     const negRecordLen = readInt32BE(buffer, (cursor - 4) - bufferStart);
-    const recordLen = -negRecordLen; // レコード全体のバイト数 (8 + payloadLen + 4)
+    const recordLen = -negRecordLen;
 
     if (recordLen <= 12 || cursor - recordLen < 0) {
-      break; // 構造が想定外の場合は中断
+      break;
     }
 
     const recordStart = cursor - recordLen;
 
     if (recordStart < bufferStart) {
-      // レコードが初期バッファより前にまたがる場合はヘッダ32バイトを取得
       const headBuf = fetchRangeBytes(url, token, recordStart, Math.min(totalSize - 1, recordStart + 32));
       const kind = headBuf[0] & 0xFF;
       const type = headBuf[2] & 0xFF;
 
       if (kind === 1 && type === 5) {
-        const layerId = readInt32BE(headBuf, 16); // 8(hdr) + 8(t)
-        const imgKind = readInt32BE(headBuf, 20); // 8(hdr) + 12
-        const pngLen = readUint32BE(headBuf, 26); // 8(hdr) + 18
+        const layerId = readInt32BE(headBuf, 16);
+        const imgKind = readInt32BE(headBuf, 20);
+        const pngLen = readUint32BE(headBuf, 26);
 
         if (layerId === -1 && imgKind === 0 && pngLen > 0) {
           const pngStart = recordStart + 30;
@@ -176,7 +171,6 @@ function extractPngBytesFromIpvTail(ipvFile) {
         }
       }
     } else {
-      // すでに取得済みの末尾バッファ内にレコード全体が収まっている場合
       const localPos = recordStart - bufferStart;
       const kind = buffer[localPos] & 0xFF;
       const type = buffer[localPos + 2] & 0xFF;
@@ -193,16 +187,12 @@ function extractPngBytesFromIpvTail(ipvFile) {
       }
     }
 
-    // 1つ前のレコードの末尾へ移動
     cursor = recordStart;
   }
 
   return null;
 }
 
-/**
- * 指定バイト範囲だけを Google Drive API から取得する
- */
 function fetchRangeBytes(url, token, start, end) {
   const res = UrlFetchApp.fetch(url, {
     headers: {
@@ -219,9 +209,6 @@ function fetchRangeBytes(url, token, start, end) {
   return res.getContent();
 }
 
-/**
- * ビッグエンディアン符号なし32ビット整数を読み取る
- */
 function readUint32BE(bytes, pos) {
   return (
     ((bytes[pos] & 0xFF) * 0x1000000) +
@@ -231,9 +218,6 @@ function readUint32BE(bytes, pos) {
   );
 }
 
-/**
- * ビッグエンディアン符号付き32ビット整数を読み取る
- */
 function readInt32BE(bytes, pos) {
   return (
     ((bytes[pos] & 0xFF) << 24) |

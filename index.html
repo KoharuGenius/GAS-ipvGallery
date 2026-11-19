@@ -46,7 +46,7 @@
       font-size: 0.9rem;
     }
     input[type="text"] {
-      width: 240px;
+      width: 280px;
     }
     select {
       cursor: pointer;
@@ -166,7 +166,6 @@
       background: var(--accent);
       color: #fff;
     }
-    /* ページネーション */
     .pagination {
       max-width: 1200px;
       margin: 28px auto 12px;
@@ -179,7 +178,6 @@
       font-size: 0.9rem;
       color: var(--subtext);
     }
-    /* 拡大モーダル */
     #modal {
       display: none;
       position: fixed;
@@ -204,7 +202,7 @@
 <header>
   <h1>🎨 ibisPaint (.ipv) ギャラリー</h1>
   <div class="controls">
-    <input type="text" id="folderId" placeholder="フォルダID（空欄でドライブ全体）">
+    <input type="text" id="folderInput" placeholder="DriveのフォルダURL または IDを貼り付け">
     <select id="sortSelect" onchange="applySortAndRender()">
       <option value="time-desc">更新日時（新しい順）</option>
       <option value="time-asc">更新日時（古い順）</option>
@@ -215,7 +213,7 @@
   </div>
 </header>
 
-<div id="status">「読み込み」ボタンを押すとGoogle Drive内の .ipv ファイルを検索します。</div>
+<div id="status">Google DriveのフォルダURL（またはID）を貼り付けて「読み込み」を押してください。</div>
 <div class="gallery" id="gallery"></div>
 
 <div class="pagination" id="pagination" style="display: none;">
@@ -229,21 +227,58 @@
 </div>
 
 <script>
-  // ★ 1ページあたりに表示するプレビュー画像数（ここを変更して表示件数を調整できます）
+  // ★ 1ページあたりに表示するプレビュー画像数
   const ITEMS_PER_PAGE = 10;
+  const STORAGE_KEY = 'ipv_gallery_last_folder_id';
 
-  let allFiles = [];        // 取得した全ファイル一覧
-  let currentPage = 1;      // 現在のページ番号（1始まり）
-  let renderGeneration = 0; // ページ切り替え時の古い通信結果を無視するための世代管理
+  let allFiles = [];
+  let activeFolderId = '';
+  let currentPage = 1;
+  let renderGeneration = 0;
 
-  window.onload = loadGallery;
+  // ページを開いたときに前回使ったフォルダIDがあれば自動入力＆自動読み込み
+  window.onload = () => {
+    const savedId = localStorage.getItem(STORAGE_KEY);
+    if (savedId) {
+      document.getElementById('folderInput').value = savedId;
+      loadGallery();
+    }
+  };
+
+  // URLまたはID文字列からフォルダIDだけを抽出する
+  function extractFolderId(input) {
+    const trimmed = input.trim();
+    if (!trimmed) return '';
+
+    // 例: https://drive.google.com/drive/folders/1a2b3c4d5e...?usp=sharing
+    const folderMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    if (folderMatch) return folderMatch[1];
+
+    // 例: https://drive.google.com/open?id=1a2b3c4d5e...
+    const idParamMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idParamMatch) return idParamMatch[1];
+
+    // すでにIDだけが入力されている場合はそのまま返す
+    return trimmed;
+  }
 
   function loadGallery() {
-    const folderId = document.getElementById('folderId').value.trim();
+    const rawInput = document.getElementById('folderInput').value;
+    const folderId = extractFolderId(rawInput);
     const gallery = document.getElementById('gallery');
     const status = document.getElementById('status');
     const pagination = document.getElementById('pagination');
 
+    if (!folderId) {
+      status.textContent = '⚠ フォルダのURLまたはIDを入力してください。';
+      return;
+    }
+
+    // 抽出したIDを入力欄にセットし、ブラウザに記憶
+    document.getElementById('folderInput').value = folderId;
+    localStorage.setItem(STORAGE_KEY, folderId);
+
+    activeFolderId = folderId;
     gallery.innerHTML = '';
     pagination.style.display = 'none';
     status.textContent = 'ファイル一覧を検索中...';
@@ -252,7 +287,7 @@
       .withSuccessHandler(files => {
         allFiles = files || [];
         if (allFiles.length === 0) {
-          status.textContent = '.ipv ファイルが見つかりませんでした。';
+          status.textContent = '指定されたフォルダ内に .ipv ファイルが見つかりませんでした。';
           return;
         }
         applySortAndRender();
@@ -260,10 +295,9 @@
       .withFailureHandler(err => {
         status.textContent = 'エラー: ' + err.message;
       })
-      .getIpvFileList(folderId);
+      .getIpvFileList(activeFolderId);
   }
 
-  // 並び替えを適用して1ページ目から描画
   function applySortAndRender() {
     if (allFiles.length === 0) return;
 
@@ -288,7 +322,6 @@
     renderCurrentPage();
   }
 
-  // ページ切り替え
   function changePage(delta) {
     const totalPages = Math.ceil(allFiles.length / ITEMS_PER_PAGE);
     const next = currentPage + delta;
@@ -299,7 +332,6 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  // 現在のページに該当するカードのみ描画＆サムネイル抽出
   function renderCurrentPage() {
     const gallery = document.getElementById('gallery');
     const status = document.getElementById('status');
@@ -317,7 +349,6 @@
     status.textContent = `全 ${totalCount} 件中 ${startIdx + 1}〜${endIdx} 件目を表示中`;
     gallery.innerHTML = '';
 
-    // ページネーションUIの更新
     if (totalPages > 1) {
       pagination.style.display = 'flex';
       document.getElementById('pageInfo').textContent = `${currentPage} / ${totalPages} ページ`;
@@ -327,7 +358,6 @@
       pagination.style.display = 'none';
     }
 
-    // 現在のページのファイルだけカードを生成してサムネイル取得
     pageFiles.forEach(file => {
       const card = document.createElement('div');
       card.className = 'card';
@@ -351,7 +381,6 @@
 
       google.script.run
         .withSuccessHandler(res => {
-          // すでに別ページへ移動していたら何もしない
           if (currentGen !== renderGeneration) return;
 
           const box = document.getElementById(`thumb-${file.id}`);
@@ -375,7 +404,7 @@
             box.innerHTML = `<span style="font-size:0.75rem;color:#e55;">読込失敗</span>`;
           }
         })
-        .extractPreviewPngBase64(file.id);
+        .extractPreviewPngBase64(file.id, activeFolderId);
     });
   }
 

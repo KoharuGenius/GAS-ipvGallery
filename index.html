@@ -35,15 +35,21 @@
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: center;
     }
-    input[type="text"] {
+    input[type="text"], select {
       background: var(--card-bg);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 8px 12px;
       border-radius: 6px;
-      width: 260px;
       font-size: 0.9rem;
+    }
+    input[type="text"] {
+      width: 240px;
+    }
+    select {
+      cursor: pointer;
     }
     button {
       background: var(--accent);
@@ -55,7 +61,12 @@
       font-weight: 500;
       font-size: 0.9rem;
     }
-    button:hover { opacity: 0.9; }
+    button:hover:not(:disabled) { opacity: 0.9; }
+    button:disabled {
+      background: #2a2a2a;
+      color: #666;
+      cursor: not-allowed;
+    }
     #status {
       max-width: 1200px;
       margin: 0 auto 16px;
@@ -108,7 +119,7 @@
       padding: 12px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 6px;
     }
     .title {
       font-size: 0.95rem;
@@ -123,12 +134,50 @@
       display: flex;
       justify-content: space-between;
     }
+    .card-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 4px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+    }
     .drive-link {
-      color: var(--accent);
+      color: var(--subtext);
       text-decoration: none;
       font-size: 0.8rem;
-      margin-top: 4px;
-      display: inline-block;
+    }
+    .drive-link:hover {
+      color: var(--text);
+      text-decoration: underline;
+    }
+    .dl-btn {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      padding: 4px 10px;
+      border-radius: 5px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: background 0.15s ease;
+    }
+    .dl-btn:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    /* ページネーション */
+    .pagination {
+      max-width: 1200px;
+      margin: 28px auto 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+    }
+    #pageInfo {
+      font-size: 0.9rem;
+      color: var(--subtext);
     }
     /* 拡大モーダル */
     #modal {
@@ -156,6 +205,12 @@
   <h1>🎨 ibisPaint (.ipv) ギャラリー</h1>
   <div class="controls">
     <input type="text" id="folderId" placeholder="フォルダID（空欄でドライブ全体）">
+    <select id="sortSelect" onchange="applySortAndRender()">
+      <option value="time-desc">更新日時（新しい順）</option>
+      <option value="time-asc">更新日時（古い順）</option>
+      <option value="name-asc">ファイル名（昇順 A→Z）</option>
+      <option value="name-desc">ファイル名（降順 Z→A）</option>
+    </select>
     <button onclick="loadGallery()">読み込み</button>
   </div>
 </header>
@@ -163,41 +218,117 @@
 <div id="status">「読み込み」ボタンを押すとGoogle Drive内の .ipv ファイルを検索します。</div>
 <div class="gallery" id="gallery"></div>
 
+<div class="pagination" id="pagination" style="display: none;">
+  <button id="prevBtn" onclick="changePage(-1)">← 前へ</button>
+  <span id="pageInfo">1 / 1 ページ</span>
+  <button id="nextBtn" onclick="changePage(1)">次へ →</button>
+</div>
+
 <div id="modal" onclick="closeModal()">
   <img id="modalImg" src="" alt="Preview">
 </div>
 
 <script>
+  // ★ 1ページあたりに表示するプレビュー画像数（ここを変更して表示件数を調整できます）
+  const ITEMS_PER_PAGE = 10;
+
+  let allFiles = [];        // 取得した全ファイル一覧
+  let currentPage = 1;      // 現在のページ番号（1始まり）
+  let renderGeneration = 0; // ページ切り替え時の古い通信結果を無視するための世代管理
+
   window.onload = loadGallery;
 
   function loadGallery() {
     const folderId = document.getElementById('folderId').value.trim();
     const gallery = document.getElementById('gallery');
     const status = document.getElementById('status');
+    const pagination = document.getElementById('pagination');
 
     gallery.innerHTML = '';
+    pagination.style.display = 'none';
     status.textContent = 'ファイル一覧を検索中...';
 
     google.script.run
-      .withSuccessHandler(renderCards)
+      .withSuccessHandler(files => {
+        allFiles = files || [];
+        if (allFiles.length === 0) {
+          status.textContent = '.ipv ファイルが見つかりませんでした。';
+          return;
+        }
+        applySortAndRender();
+      })
       .withFailureHandler(err => {
         status.textContent = 'エラー: ' + err.message;
       })
       .getIpvFileList(folderId);
   }
 
-  function renderCards(files) {
+  // 並び替えを適用して1ページ目から描画
+  function applySortAndRender() {
+    if (allFiles.length === 0) return;
+
+    const sortType = document.getElementById('sortSelect').value;
+
+    allFiles.sort((a, b) => {
+      switch (sortType) {
+        case 'time-desc':
+          return b.updatedTime - a.updatedTime;
+        case 'time-asc':
+          return a.updatedTime - b.updatedTime;
+        case 'name-asc':
+          return a.name.localeCompare(b.name, 'ja', { numeric: true });
+        case 'name-desc':
+          return b.name.localeCompare(a.name, 'ja', { numeric: true });
+        default:
+          return 0;
+      }
+    });
+
+    currentPage = 1;
+    renderCurrentPage();
+  }
+
+  // ページ切り替え
+  function changePage(delta) {
+    const totalPages = Math.ceil(allFiles.length / ITEMS_PER_PAGE);
+    const next = currentPage + delta;
+    if (next < 1 || next > totalPages) return;
+
+    currentPage = next;
+    renderCurrentPage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // 現在のページに該当するカードのみ描画＆サムネイル抽出
+  function renderCurrentPage() {
     const gallery = document.getElementById('gallery');
     const status = document.getElementById('status');
+    const pagination = document.getElementById('pagination');
 
-    if (!files || files.length === 0) {
-      status.textContent = '.ipv ファイルが見つかりませんでした。';
-      return;
+    renderGeneration++;
+    const currentGen = renderGeneration;
+
+    const totalCount = allFiles.length;
+    const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
+    const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalCount);
+    const pageFiles = allFiles.slice(startIdx, endIdx);
+
+    status.textContent = `全 ${totalCount} 件中 ${startIdx + 1}〜${endIdx} 件目を表示中`;
+    gallery.innerHTML = '';
+
+    // ページネーションUIの更新
+    if (totalPages > 1) {
+      pagination.style.display = 'flex';
+      document.getElementById('pageInfo').textContent = `${currentPage} / ${totalPages} ページ`;
+      document.getElementById('prevBtn').disabled = (currentPage === 1);
+      document.getElementById('nextBtn').disabled = (currentPage === totalPages);
+    } else {
+      pagination.style.display = 'none';
     }
 
-    status.textContent = `${files.length} 件の .ipv ファイルが見つかりました（サムネイルを順次抽出中...）`;
-
-    files.forEach(file => {
+    // 現在のページのファイルだけカードを生成してサムネイル取得
+    pageFiles.forEach(file => {
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = `
@@ -205,20 +336,27 @@
           <div class="spinner"></div>
         </div>
         <div class="meta">
-          <div class="title" title="${file.name}">${file.name}</div>
+          <div class="title" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
           <div class="info">
             <span>${file.updated}</span>
             <span>${file.sizeKB} KB</span>
           </div>
-          <a class="drive-link" href="${file.url}" target="_blank" rel="noopener">Driveで開く ↗</a>
+          <div class="card-actions">
+            <a class="drive-link" href="${file.url}" target="_blank" rel="noopener">Driveで開く ↗</a>
+            <a class="dl-btn" href="${file.downloadUrl}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">⬇ ダウンロード</a>
+          </div>
         </div>
       `;
       gallery.appendChild(card);
 
-      // サムネイルを非同期で1件ずつ取得（キャッシュ利用または抽出）
       google.script.run
         .withSuccessHandler(res => {
+          // すでに別ページへ移動していたら何もしない
+          if (currentGen !== renderGeneration) return;
+
           const box = document.getElementById(`thumb-${file.id}`);
+          if (!box) return;
+
           if (res.success) {
             const img = document.createElement('img');
             img.src = res.dataUrl;
@@ -231,11 +369,20 @@
           }
         })
         .withFailureHandler(err => {
+          if (currentGen !== renderGeneration) return;
           const box = document.getElementById(`thumb-${file.id}`);
-          box.innerHTML = `<span style="font-size:0.75rem;color:#e55;">読込失敗</span>`;
+          if (box) {
+            box.innerHTML = `<span style="font-size:0.75rem;color:#e55;">読込失敗</span>`;
+          }
         })
         .extractPreviewPngBase64(file.id);
     });
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, m => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
   }
 
   function openModal(src) {

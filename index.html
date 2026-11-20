@@ -236,12 +236,12 @@
   let currentPage = 1;
   let renderGeneration = 0;
 
-  // ページを開いたときに前回使ったフォルダIDがあれば自動入力＆自動読み込み
+  // ページを開いたときに前回使ったフォルダIDがあれば自動入力
   window.onload = () => {
     const savedId = localStorage.getItem(STORAGE_KEY);
     if (savedId) {
       document.getElementById('folderInput').value = savedId;
-      loadGallery();
+      //loadGallery();
     }
   };
 

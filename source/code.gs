@@ -199,19 +199,14 @@ function extractPngBytesFromIpvTail(fileId,totalSize) {
 
           // PNGシグネチャ検証
           const isValidPng = PNG_SIG.every((b, idx) => (pngBytes[idx] & 0xFF) === b);
-          if (!isValidPng) {
-            return null;
-          }
-
+          if (!isValidPng) {return null;}
           return pngBytes;
         }
       }
-
       // 1つ前のレコードの末尾へ移動
       cursor = recordStart;
     }
-
-    return { success: false, error: '末尾付近にプレビュー画像が見つかりませんでした' };
+    return null;
   } catch (e) {
     return { success: false, error: e.message };
   }

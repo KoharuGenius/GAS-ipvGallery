@@ -75,10 +75,11 @@ function extractPreviewPngBase64(fileId, folderID) {
     }
 
     // 2. キャッシュがない、または .ipv の方が新しい場合は末尾から再抽出
-    if(ipvFile.getSize() < 24){
+    const totalSize = ipvFile.getSize();
+    if(totalSize < 24){
       return { success: false, error: 'ファイルサイズが小さすぎます' };   
     }
-    const pngBytes = extractPngBytesFromIpvTail(fileId);
+    const pngBytes = extractPngBytesFromIpvTail(fileId, totalSize);
     if (!pngBytes) {
       return { success: false, error: 'プレビュー画像が見つかりませんでした' };
     }
@@ -132,7 +133,7 @@ function getOrCreateCacheFolder(folderID) {
 /**
  * .ipv ファイルの末尾から逆走査してプレビューPNGのバイト配列を抽出する（50MB超対応）
  */
-function extractPngBytesFromIpvTail(fileId) {
+function extractPngBytesFromIpvTail(fileId,totalSize) {
   // PNGシグネチャ
   const PNG_SIG = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -199,13 +200,10 @@ function extractPngBytesFromIpvTail(fileId) {
           // PNGシグネチャ検証
           const isValidPng = PNG_SIG.every((b, idx) => (pngBytes[idx] & 0xFF) === b);
           if (!isValidPng) {
-            return { success: false, error: '抽出したデータが有効なPNGシグネチャと一致しません' };
+            return null;
           }
 
-          return {
-            success: true,
-            dataUrl: 'data:image/png;base64,' + Utilities.base64Encode(pngBytes)
-          };
+          return pngBytes;
         }
       }
 
